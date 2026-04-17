@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>リアルタイム音声遅延</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans min-h-screen flex flex-col items-center justify-center p-4">
+    
+    <div class="bg-white rounded-xl shadow-lg p-6 w-full max-w-lg">
+        <h1 class="text-2xl font-bold mb-4 text-center text-blue-600">リアルタイム音声ディレイ</h1>
+        
+        <!-- ハウリング注意の警告 -->
+        <div class="bg-yellow-50 border-l-4 border-yellow-500 text-yellow-800 p-4 mb-6 rounded text-sm">
+            <p class="font-bold flex items-center mb-1">
+                <svg class="w-5 h-5 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
+                ハウリングにご注意ください
+            </p>
+            <p>スピーカーから音を出した状態でマイクをオンにすると、音がループして不快なノイズが発生します。<strong>必ずイヤホン・ヘッドホンを接続</strong>してご使用ください。</p>
+        </div>
+
+        <div id="error-msg" class="hidden bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded text-sm"></div>
+
+        <div class="space-y-5">
+            <!-- デバイス選択 -->
+            <div class="space-y-3">
+                <div>
+                    <label for="input-device" class="block text-sm font-medium text-gray-700 mb-1">入力デバイス (マイク)</label>
+                    <select id="input-device" class="w-full border border-gray-300 rounded-md shadow-sm p-2 bg-gray-50 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">権限を確認中...</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label for="output-device" class="block text-sm font-medium text-gray-700 mb-1">出力デバイス (イヤホン/スピーカー)</label>
+                    <select id="output-device" class="w-full border border-gray-300 rounded-md shadow-sm p-2 bg-gray-50 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">読込中...</option>
+                    </select>
+                    <p id="output-unsupported-msg" class="text-xs text-red-500 mt-1 hidden">※お使いのブラウザは出力先の変更に対応していません。OSの標準出力が使用されます。</p>
+                </div>
+            </div>
+
+            <hr class="border-gray-200">
+
+            <!-- 遅延設定 -->
+            <div>
+                <div class="flex justify-between mb-1">
+                    <label for="delay-time" class="block text-sm font-medium text-gray-700">遅延時間 (ディレイ)</label>
+                    <span class="text-sm font-bold text-blue-600"><span id="delay-value-display">2.00</span> 秒</span>
+                </div>
+                <input type="range" id="delay-time" min="0" max="3" step="0.02" value="2.00" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                <div class="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>0秒</span>
+                    <span>3秒</span>
+                </div>
+            </div>
+
+            <!-- コントロールボタン -->
+            <div class="flex gap-4 pt-2">
+                <button id="start-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow transition duration-200 flex justify-center items-center">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132A1 1 0 0015 14.13V9.87a1 1 0 00-1.555-.832z"></path></svg>
+                    開始
+                </button>
+                <button id="stop-btn" disabled class="flex-1 bg-gray-300 text-gray-500 font-bold py-3 px-4 rounded-lg shadow transition duration-200 cursor-not-allowed flex justify-center items-center">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path></svg>
+                    停止
+                </button>
+            </div>
+
+            <div id="status-indicator" class="text-center text-sm font-medium text-gray-500 mt-2">
+                現在停止中
+            </div>
+        </div>
+    </div>
+
+    <!-- 出力先制御用の非表示audio要素 -->
+    <audio id="audio-output" autoplay></audio>
+
+    <script>
+        const inputDeviceSelect = document.getElementById('input-device');
+        const outputDeviceSelect = document.getElementById('output-device');
+        const delayTimeInput = document.getElementById('delay-time');
+        const delayValueDisplay = document.getElementById('delay-value-display');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const statusIndicator = document.getElementById('status-indicator');
+        const errorMsg = document.getElementById('error-msg');
+        const outputUnsupportedMsg = document.getElementById('output-unsupported-msg');
+        const audioElement = document.getElementById('audio-output');
+
+        let audioContext = null;
+        let mediaStream = null;
+        let sourceNode = null;
+        let delayNode = null;
+        let destinationNode = null;
+
+        // AudioContextのセットアップ（ユーザーインタラクション後に生成）
+        const getAudioContext = () => {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            return audioContext;
+        };
+
+        // エラーメッセージの表示
+        const showError = (msg) => {
+            errorMsg.textContent = msg;
+            errorMsg.classList.remove('hidden');
+            setTimeout(() => {
+                errorMsg.classList.add('hidden');
+            }, 5000);
+        };
+
+        // デバイス一覧を取得してUIを更新
+        const updateDeviceList = async () => {
+            try {
+                // 初回はラベル情報を取得するために一度ダミーでマイク権限を要求する
+                await navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+                    // すぐにストリームを閉じる
+                    stream.getTracks().forEach(track => track.stop());
+                });
+                
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                
+                inputDeviceSelect.innerHTML = '';
+                outputDeviceSelect.innerHTML = '';
+                
+                let hasOutputDevices = false;
+
+                devices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    
+                    if (device.kind === 'audioinput') {
+                        option.text = device.label || `マイク ${inputDeviceSelect.length + 1}`;
+                        inputDeviceSelect.appendChild(option);
+                    } else if (device.kind === 'audiooutput') {
+                        hasOutputDevices = true;
+                        option.text = device.label || `スピーカー ${outputDeviceSelect.length + 1}`;
+                        outputDeviceSelect.appendChild(option);
+                    }
+                });
+
+                // ブラウザが setSinkId (出力先変更) に対応しているかチェック
+                if (!hasOutputDevices || typeof audioElement.setSinkId !== 'function') {
+                    outputDeviceSelect.disabled = true;
+                    outputDeviceSelect.innerHTML = '<option value="">OS標準の出力を使用します</option>';
+                    outputUnsupportedMsg.classList.remove('hidden');
+                }
+
+            } catch (err) {
+                inputDeviceSelect.innerHTML = '<option value="">デバイスの取得に失敗</option>';
+                showError('マイクのアクセス権限が拒否されているか、取得できませんでした。');
+                console.error(err);
+            }
+        };
+
+        // スライダー操作時にディレイ値を即座に反映
+        delayTimeInput.addEventListener('input', (e) => {
+            const delay = parseFloat(e.target.value);
+            delayValueDisplay.textContent = delay.toFixed(2);
+            if (delayNode) {
+                delayNode.delayTime.value = delay;
+            }
+        });
+
+        // 処理開始
+        const startProcessing = async () => {
+            const ctx = getAudioContext();
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+            }
+
+            const inputDeviceId = inputDeviceSelect.value;
+            const outputDeviceId = outputDeviceSelect.value;
+
+            // マイクの制約設定。エコーキャンセル等は音質重視のため無効化（ディレイ目的のため）
+            const constraints = {
+                audio: {
+                    deviceId: inputDeviceId ? { exact: inputDeviceId } : undefined,
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false
+                }
+            };
+
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+                
+                // ノードの作成
+                sourceNode = ctx.createMediaStreamSource(mediaStream);
+                delayNode = ctx.createDelay(10.0); // 最大遅延を10秒に設定
+                destinationNode = ctx.createMediaStreamDestination(); // オーディオ要素に送るための出口
+                
+                // 初期の遅延時間を適用
+                const delayValue = parseFloat(delayTimeInput.value);
+                delayNode.delayTime.value = delayValue;
+
+                // 接続: 入力 -> ディレイ -> 出力先
+                sourceNode.connect(delayNode);
+                delayNode.connect(destinationNode);
+
+                // オーディオ要素にストリームを割り当て
+                audioElement.srcObject = destinationNode.stream;
+                
+                // 出力先デバイスが指定可能であれば設定する
+                if (outputDeviceId && typeof audioElement.setSinkId === 'function') {
+                    await audioElement.setSinkId(outputDeviceId);
+                }
+
+                await audioElement.play();
+
+                // UIの切り替え
+                startBtn.disabled = true;
+                startBtn.classList.replace('bg-blue-600', 'bg-gray-400');
+                startBtn.classList.replace('hover:bg-blue-700', 'hover:bg-gray-400');
+                startBtn.classList.add('cursor-not-allowed');
+
+                stopBtn.disabled = false;
+                stopBtn.classList.replace('bg-gray-300', 'bg-red-600');
+                stopBtn.classList.replace('text-gray-500', 'text-white');
+                stopBtn.classList.replace('cursor-not-allowed', 'hover:bg-red-700');
+                
+                statusIndicator.innerHTML = '<span class="text-green-600 font-bold animate-pulse">● 音声遅延出力中...</span>';
+
+            } catch (err) {
+                showError('マイクのアクセスに失敗しました。他のアプリで使用中か確認してください。');
+                console.error(err);
+            }
+        };
+
+        // 処理停止
+        const stopProcessing = () => {
+            // マイクのストリームを停止
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            
+            // ノードの切断
+            if (sourceNode) sourceNode.disconnect();
+            if (delayNode) delayNode.disconnect();
+            if (destinationNode) destinationNode.disconnect();
+            
+            audioElement.pause();
+            audioElement.srcObject = null;
+
+            // UIの切り替え
+            startBtn.disabled = false;
+            startBtn.classList.replace('bg-gray-400', 'bg-blue-600');
+            startBtn.classList.replace('hover:bg-gray-400', 'hover:bg-blue-700');
+            startBtn.classList.remove('cursor-not-allowed');
+
+            stopBtn.disabled = true;
+            stopBtn.classList.replace('bg-red-600', 'bg-gray-300');
+            stopBtn.classList.replace('text-white', 'text-gray-500');
+            stopBtn.classList.replace('hover:bg-red-700', 'cursor-not-allowed');
+            stopBtn.classList.add('cursor-not-allowed');
+
+            statusIndicator.innerHTML = '現在停止中';
+        };
+
+        startBtn.addEventListener('click', startProcessing);
+        stopBtn.addEventListener('click', stopProcessing);
+
+        // 実行中に出力先デバイスを変更した場合、即座に反映
+        outputDeviceSelect.addEventListener('change', async (e) => {
+            if (audioElement.srcObject && typeof audioElement.setSinkId === 'function') {
+                try {
+                    await audioElement.setSinkId(e.target.value);
+                } catch(err) {
+                    console.error('出力デバイスの変更に失敗しました', err);
+                }
+            }
+        });
+
+        // ページロード時にデバイス一覧を取得
+        window.addEventListener('DOMContentLoaded', () => {
+            updateDeviceList();
+        });
+
+        // USBマイク等の抜き差しを検知して一覧を更新
+        navigator.mediaDevices.addEventListener('devicechange', updateDeviceList);
+    </script>
+</body>
+</html>
