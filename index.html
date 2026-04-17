@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>リアルタイム音声ディレイ</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 </head>
 <body class="bg-gray-100 text-gray-800 font-sans min-h-screen flex flex-col items-center justify-center p-4">
     
@@ -43,16 +44,48 @@
 
             <hr class="border-gray-200">
 
-            <!-- 遅延設定 -->
-            <div>
-                <div class="flex justify-between mb-1">
-                    <label for="delay-time" class="block text-sm font-medium text-gray-700">遅延時間 (ディレイ)</label>
-                    <span class="text-sm font-bold text-blue-600"><span id="delay-value-display">0.20</span> 秒</span>
+            <!-- タイマー表示 -->
+            <div class="flex flex-col items-center justify-center py-2">
+                <div class="text-gray-500 text-sm font-medium mb-1">経過時間</div>
+                <div id="timer-display" class="text-5xl font-mono font-bold text-gray-800 tracking-wider">00:00.00</div>
+            </div>
+
+            <!-- 練習用テキストボックス -->
+            <div class="w-full mt-2 mb-2">
+                <textarea 
+                    class="w-full h-32 p-3 border border-gray-300 rounded-md shadow-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none text-gray-800" 
+                    placeholder="練習する文章を入力してください"></textarea>
+            </div>
+
+            <hr class="border-gray-200">
+
+            <!-- 設定エリア -->
+            <div class="space-y-5">
+                <!-- 遅延設定 -->
+                <div>
+                    <div class="flex justify-between mb-1">
+                        <label for="delay-time" class="block text-sm font-medium text-gray-700">遅延時間 (ディレイ)</label>
+                        <span class="text-sm font-bold text-blue-600"><span id="delay-value-display">0.20</span> 秒</span>
+                    </div>
+                    <input type="range" id="delay-time" min="0" max="3" step="0.02" value="0.20" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                    <div class="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>0秒</span>
+                        <span>3秒</span>
+                    </div>
                 </div>
-                <input type="range" id="delay-time" min="0" max="3" step="0.02" value="0.20" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
-                <div class="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>0秒</span>
-                    <span>3秒</span>
+
+                <!-- ピッチ設定 -->
+                <div>
+                    <div class="flex justify-between mb-1">
+                        <label for="pitch-control" class="block text-sm font-medium text-gray-700">声の高さ (ピッチ)</label>
+                        <span class="text-sm font-bold text-blue-600"><span id="pitch-value-display">±0</span> 半音</span>
+                    </div>
+                    <input type="range" id="pitch-control" min="-12" max="12" step="1" value="0" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                    <div class="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>低い</span>
+                        <span>デフォルト</span>
+                        <span>高い</span>
+                    </div>
                 </div>
             </div>
 
@@ -82,6 +115,9 @@
         const outputDeviceSelect = document.getElementById('output-device');
         const delayTimeInput = document.getElementById('delay-time');
         const delayValueDisplay = document.getElementById('delay-value-display');
+        const pitchControlInput = document.getElementById('pitch-control');
+        const pitchValueDisplay = document.getElementById('pitch-value-display');
+        const timerDisplay = document.getElementById('timer-display');
         const startBtn = document.getElementById('start-btn');
         const stopBtn = document.getElementById('stop-btn');
         const statusIndicator = document.getElementById('status-indicator');
@@ -93,7 +129,25 @@
         let mediaStream = null;
         let sourceNode = null;
         let delayNode = null;
+        let pitchShiftNode = null;
         let destinationNode = null;
+        
+        let timerAnimationFrame = null;
+        let startTime = null;
+
+        // タイマー更新関数
+        const updateTimer = () => {
+            if (!startTime) return;
+            const elapsed = Date.now() - startTime;
+            
+            const totalSeconds = Math.floor(elapsed / 1000);
+            const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+            const seconds = String(totalSeconds % 60).padStart(2, '0');
+            const milliseconds = String(Math.floor((elapsed % 1000) / 10)).padStart(2, '0');
+            
+            timerDisplay.textContent = `${minutes}:${seconds}.${milliseconds}`;
+            timerAnimationFrame = requestAnimationFrame(updateTimer);
+        };
 
         // AudioContextのセットアップ（ユーザーインタラクション後に生成）
         const getAudioContext = () => {
@@ -165,12 +219,24 @@
             }
         });
 
+        // スライダー操作時にピッチ値を即座に反映
+        pitchControlInput.addEventListener('input', (e) => {
+            const pitch = parseInt(e.target.value, 10);
+            pitchValueDisplay.textContent = pitch > 0 ? `+${pitch}` : (pitch === 0 ? '±0' : pitch);
+            if (pitchShiftNode) {
+                pitchShiftNode.pitch = pitch;
+            }
+        });
+
         // 処理開始
         const startProcessing = async () => {
             const ctx = getAudioContext();
             if (ctx.state === 'suspended') {
                 await ctx.resume();
             }
+            
+            // Tone.jsにコンテキストを同期
+            Tone.setContext(ctx);
 
             const inputDeviceId = inputDeviceSelect.value;
             const outputDeviceId = outputDeviceSelect.value;
@@ -190,16 +256,18 @@
                 
                 // ノードの作成
                 sourceNode = ctx.createMediaStreamSource(mediaStream);
-                delayNode = ctx.createDelay(10.0); // 最大遅延を10秒に設定
+                // Tone.jsのノードを使用してディレイとピッチシフトを実装
+                delayNode = new Tone.Delay(parseFloat(delayTimeInput.value), 10.0); 
+                pitchShiftNode = new Tone.PitchShift(parseInt(pitchControlInput.value, 10));
                 destinationNode = ctx.createMediaStreamDestination(); // オーディオ要素に送るための出口
                 
-                // 初期の遅延時間を適用
-                const delayValue = parseFloat(delayTimeInput.value);
-                delayNode.delayTime.value = delayValue;
-
-                // 接続: 入力 -> ディレイ -> 出力先
-                sourceNode.connect(delayNode);
-                delayNode.connect(destinationNode);
+                // 接続: 入力 -> ディレイ -> ピッチシフト -> 出力先
+                // 生ノードからTone.jsノードへの接続
+                sourceNode.connect(delayNode.input || delayNode);
+                // Tone.jsノード同士の接続
+                delayNode.connect(pitchShiftNode);
+                // Tone.jsノードから生ノードへの接続
+                pitchShiftNode.connect(destinationNode);
 
                 // オーディオ要素にストリームを割り当て
                 audioElement.srcObject = destinationNode.stream;
@@ -224,6 +292,10 @@
                 
                 statusIndicator.innerHTML = '<span class="text-green-600 font-bold animate-pulse">● 音声遅延出力中...</span>';
 
+                // タイマー開始
+                startTime = Date.now();
+                updateTimer();
+
             } catch (err) {
                 showError('マイクのアクセスに失敗しました。他のアプリで使用中か確認してください。');
                 console.error(err);
@@ -238,9 +310,10 @@
                 mediaStream = null;
             }
             
-            // ノードの切断
+            // ノードの切断・破棄
             if (sourceNode) sourceNode.disconnect();
-            if (delayNode) delayNode.disconnect();
+            if (delayNode && delayNode.dispose) delayNode.dispose();
+            if (pitchShiftNode && pitchShiftNode.dispose) pitchShiftNode.dispose();
             if (destinationNode) destinationNode.disconnect();
             
             audioElement.pause();
@@ -259,6 +332,11 @@
             stopBtn.classList.add('cursor-not-allowed');
 
             statusIndicator.innerHTML = '現在停止中';
+
+            // タイマー停止・リセット
+            if (timerAnimationFrame) cancelAnimationFrame(timerAnimationFrame);
+            startTime = null;
+            timerDisplay.textContent = '00:00.00';
         };
 
         startBtn.addEventListener('click', startProcessing);
